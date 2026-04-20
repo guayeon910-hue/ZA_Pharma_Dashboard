@@ -1,0 +1,58 @@
+# 남아프리카공화국(ZA) 1공정 — 크롤링 소스 메타
+country: "ZA"
+currency: "ZAR"
+
+sources:
+  clicks_retail:
+    tier: 1
+    url_seed: "https://www.clicks.co.za"
+    access_method: playwright
+    rate_limit_qps: 0.3
+    cron_slot: "0 22 * * *"
+    note: "남아공 최대 약국 체인 (930개 매장) — 일반가 vs ClubCard 할인가 DOM 분리 수집"
+
+  dischem_retail:
+    tier: 1
+    url_seed: "https://www.dischem.co.za"
+    access_method: playwright
+    rate_limit_qps: 0.3
+    cron_slot: "10 22 * * *"
+    note: "Dis-Chem 약국 체인 — Loyalty Benefit 할인가 별도 컬럼 저장"
+
+  sahpra_registry:
+    tier: 2
+    url_seed: "https://www.sahpra.org.za/registered-health-products/"
+    access_method: html_static
+    rate_limit_qps: 0.5
+    cron_slot: "0 1 * * 1"
+    note: "SAHPRA 등록 의약품 DB + 라이선스 시설 + 안전성 경보 (주 1회)"
+
+  mpr_sep:
+    tier: 3
+    url_seed: "https://www.mpr.gov.za/PriceListings/Index"
+    access_method: html_static
+    rate_limit_qps: 0.2
+    cron_slot: "0 2 1 * *"
+    note: "Medicine Price Registry — SEP 엑셀 파일 DOM 변경 감지 후 다운로드 (월 단위)"
+
+  ndoh_mhpl:
+    tier: 3
+    url_seed: "https://www.health.gov.za/index.php/master-health-products-list"
+    access_method: local_excel
+    rate_limit_qps: 0.1
+    cron_slot: "0 3 1 * *"
+    note: "NDoH 마스터 조달 카탈로그 — No-Bid 항목 자동 감지 (월 1회)"
+
+  etender_procurement:
+    tier: 3
+    url_seed: "https://www.etenders.gov.za/content/notices"
+    access_method: playwright
+    rate_limit_qps: 0.3
+    cron_slot: "0 23 * * *"
+    note: "국가 eTender 포털 — 보건부 의약품 입찰 실시간 모니터링 (일 1회)"
+
+  basic_files:
+    tier: 2
+    access_method: local_pdf
+    path: "datas/basic_files/"
+    note: "제품 브로슈어 — 임상 근거 및 제품 규격"
