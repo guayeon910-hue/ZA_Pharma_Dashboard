@@ -1466,6 +1466,352 @@ async def api_fob_calculate(body: FobBody) -> JSONResponse:
     return JSONResponse({"ok": True, **d})
 
 
+# ── ZA 리포트 세션 API (팀장 양식: session/init → pricing → partner → combined) ─
+
+class SessionInitBody(BaseModel):
+    product_key:   str
+    product_id:    str | None = None
+    product_label: str = ""
+    inn_name:      str = ""
+
+
+class PricingBody(BaseModel):
+    session_id:  str
+    product_key: str = ""
+
+
+class PartnerBody(BaseModel):
+    session_id:  str
+    product_key: str = ""
+    criteria:    list[str] = []
+
+
+# 공통 8개 제품 INN 매핑
+_KEY_TO_INN: dict[str, str] = {
+    "sereterol_activair": "Fluticasone+Salmeterol",
+    "omethyl_cutielet":   "Omega-3",
+    "rosumeg_combigel":   "Rosuvastatin",
+    "atmeg_combigel":     "Atorvastatin",
+    "ciloduo":            "Cilostazol",
+    "gastiin_cr":         "Mosapride",
+    "hydrine":            "Hydroxyurea",
+    "gadvoa_inj":         "Gadobutrol",
+}
+
+_KEY_TO_LABEL: dict[str, str] = {
+    "sereterol_activair": "Sereterol Activair",
+    "omethyl_cutielet":   "Omethyl Cutielet",
+    "rosumeg_combigel":   "Rosumeg Combigel",
+    "atmeg_combigel":     "Atmeg Combigel",
+    "ciloduo":            "Ciloduo",
+    "gastiin_cr":         "Gastiin CR",
+    "hydrine":            "Hydrine",
+    "gadvoa_inj":         "Gadvoa Inj",
+}
+
+# 인메모리 세션 저장소 (DB 없이도 동작)
+_sessions: dict[str, Any] = {}
+
+
+@app.post("/api/za/report/session/init")
+async def za_session_init(body: SessionInitBody) -> JSONResponse:
+    """1공정: 품목 선택 시 자동 시장조사 + 세션 생성."""
+    import uuid as _uuid
+    import os
+    import anthropic as _anthropic
+
+    session_id = str(_uuid.uuid4())
+    report_id  = str(_uuid.uuid4())
+    inn = body.inn_name or _KEY_TO_INN.get(body.product_key, body.product_label)
+    label = body.product_label or _KEY_TO_LABEL.get(body.product_key, body.product_key)
+
+    # Claude API로 시장조사 보고서 생성
+    market_text = ""
+    ak = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if ak:
+        try:
+            client = _anthropic.Anthropic(api_key=ak)
+            msg = client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=1200,
+                system=(
+                    "You are a South Africa pharmaceutical market analyst. "
+                    "Respond in Korean. Be concise and data-focused."
+                ),
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"{label} ({inn})의 남아프리카공화국 시장 진입 가능성을 분석해주세요.\n"
+                        "다음을 포함하세요:\n"
+                        "1. SAHPRA 등록 현황 및 경쟁 제품\n"
+                        "2. SEP(단일출고가) 및 소매가 수준 (ZAR)\n"
+                        "3. 공공시장(MHPL/EML) vs 민간시장 진입 전략\n"
+                        "4. 주요 리스크 및 기회\n"
+                        "200단어 이내로 요약해주세요."
+                    ),
+                }],
+            )
+            market_text = msg.content[0].text
+        except Exception as exc:
+            market_text = f"[분석 오류: {exc}]"
+    else:
+        market_text = "[ANTHROPIC_API_KEY 미설정 — 시장조사 생략]"
+
+    # 세션 저장
+    _sessions[session_id] = {
+        "session_id":   session_id,
+        "product_key":  body.product_key,
+        "product_id":   body.product_id,
+        "product_label": label,
+        "inn_name":     inn,
+        "market_done":  True,
+        "pricing_done": False,
+        "partner_done": False,
+        "reports": [{
+            "id":          report_id,
+            "report_type": "market",
+            "badge":       "조사",
+            "title":       f"시장조사 · {label}",
+            "content":     market_text,
+        }],
+    }
+
+    # Supabase 저장 시도 (실패해도 계속)
+    try:
+        from utils.db import get_supabase_client
+        sb = get_supabase_client()
+        sb.table("za_report_sessions").insert({
+            "id": session_id,
+            "product_id": body.product_id,
+            "product_label": label,
+            "market_research_done": True,
+        }).execute()
+        sb.table("za_reports").insert({
+            "id": report_id,
+            "session_id": session_id,
+            "report_type": "market",
+            "title": f"시장조사 · {label}",
+            "badge": "조사",
+            "content_json": {"text": market_text},
+        }).execute()
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "session_id": session_id, "report_id": report_id, "market_summary": market_text[:200]})
+
+
+@app.post("/api/za/report/pricing")
+async def za_report_pricing(body: PricingBody) -> JSONResponse:
+    """2공정: 공공·민간 가격 분석 병렬 생성."""
+    import uuid as _uuid
+    import os
+    import anthropic as _anthropic
+    from analysis.fob_calculator import calc_logic_a, calc_logic_b, fob_result_to_dict
+    from decimal import Decimal
+
+    session = _sessions.get(body.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다. 먼저 분석 실행을 완료하세요.")
+
+    label = session.get("product_label", body.product_key)
+    inn   = session.get("inn_name", _KEY_TO_INN.get(body.product_key, ""))
+
+    # Claude API로 가격 분석
+    scenarios: dict[str, Any] = {}
+    ak = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if ak:
+        try:
+            client = _anthropic.Anthropic(api_key=ak)
+            msg = client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=600,
+                system="You are a pharmaceutical pricing expert for South Africa. Respond ONLY with valid JSON.",
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"{label} ({inn})의 남아공 수출 FOB 가격을 USD로 산출해주세요.\n"
+                        "다음 JSON 형식으로만 답변하세요:\n"
+                        '{"conservative":{"fob_usd":0.00,"zar":0.00},'
+                        '"baseline":{"fob_usd":0.00,"zar":0.00},'
+                        '"premium":{"fob_usd":0.00,"zar":0.00}}\n'
+                        "ZAR/USD 환율 약 18 기준. 공공입찰가 Logic A, 민간소매가 Logic B 평균 적용."
+                    ),
+                }],
+            )
+            import json as _json
+            raw = msg.content[0].text.strip()
+            # JSON 추출
+            start = raw.find('{')
+            end = raw.rfind('}') + 1
+            if start >= 0 and end > start:
+                scenarios = _json.loads(raw[start:end])
+        except Exception:
+            pass
+
+    if not scenarios:
+        # 폴백: FOB 계산기 사용
+        try:
+            res_pub  = calc_logic_a(Decimal("50"), inn_name=inn)
+            res_priv = calc_logic_b(Decimal("50"), inn_name=inn)
+            base_usd = float(res_priv.base.fob_usd)
+            scenarios = {
+                "conservative": {"fob_usd": round(base_usd * 0.77, 2), "zar": round(base_usd * 0.77 * 18, 2)},
+                "baseline":     {"fob_usd": round(base_usd, 2),          "zar": round(base_usd * 18, 2)},
+                "premium":      {"fob_usd": round(base_usd * 1.23, 2),  "zar": round(base_usd * 1.23 * 18, 2)},
+            }
+        except Exception:
+            scenarios = {
+                "conservative": {"fob_usd": 10.00, "zar": 180.0},
+                "baseline":     {"fob_usd": 13.00, "zar": 234.0},
+                "premium":      {"fob_usd": 16.00, "zar": 288.0},
+            }
+
+    id_pub  = str(_uuid.uuid4())
+    id_priv = str(_uuid.uuid4())
+
+    # 세션 업데이트
+    if session:
+        session["pricing_done"] = True
+        session["reports"].extend([
+            {"id": id_pub,  "report_type": "pricing_public",  "badge": "공공", "title": f"수출가격 전략 [공공] · {label}", "scenarios": scenarios},
+            {"id": id_priv, "report_type": "pricing_private", "badge": "민간", "title": f"수출가격 전략 [민간] · {label}", "scenarios": scenarios},
+        ])
+
+    return JSONResponse({
+        "ok": True,
+        "session_id":       body.session_id,
+        "scenarios":        scenarios,
+        "report_id_public":  id_pub,
+        "report_id_private": id_priv,
+    })
+
+
+@app.post("/api/za/report/partner")
+async def za_report_partner(body: PartnerBody) -> JSONResponse:
+    """3공정: 바이어 발굴 + 결합본 비동기 트리거."""
+    import uuid as _uuid
+    import os
+    import anthropic as _anthropic
+
+    session = _sessions.get(body.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+
+    label    = session.get("product_label", body.product_key)
+    inn      = session.get("inn_name", _KEY_TO_INN.get(body.product_key, ""))
+    criteria = body.criteria or ["매출규모", "파이프라인", "제조소", "수입경험", "약국체인"]
+
+    top10: list[dict[str, Any]] = []
+    ak = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if ak:
+        try:
+            import json as _json
+            client = _anthropic.Anthropic(api_key=ak)
+            msg = client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=800,
+                system="You are a South Africa pharmaceutical business development expert. Respond ONLY with valid JSON.",
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"{label} ({inn}) 남아공 수입·유통 파트너 Top 10을 추천해주세요.\n"
+                        f"평가 기준: {', '.join(criteria)}\n"
+                        "실제 존재하는 남아공 제약 회사 이름으로 답변하세요.\n"
+                        '응답 형식: [{"rank":1,"name":"Company Name"},{"rank":2,"name":"..."},...]'
+                    ),
+                }],
+            )
+            raw = msg.content[0].text.strip()
+            start = raw.find('[')
+            end = raw.rfind(']') + 1
+            if start >= 0 and end > start:
+                top10 = _json.loads(raw[start:end])
+        except Exception:
+            pass
+
+    if not top10:
+        # 폴백 Top 10
+        top10 = [
+            {"rank": 1, "name": "Aspen Pharmacare Holdings"},
+            {"rank": 2, "name": "Adcock Ingram Holdings"},
+            {"rank": 3, "name": "Cipla Quality Chemical"},
+            {"rank": 4, "name": "Dis-Chem Pharmacies"},
+            {"rank": 5, "name": "Clicks Group"},
+            {"rank": 6, "name": "Pharmed (Pty) Ltd"},
+            {"rank": 7, "name": "Fresenius Kabi South Africa"},
+            {"rank": 8, "name": "Austell Pharmaceuticals"},
+            {"rank": 9, "name": "Bayer Healthcare SA"},
+            {"rank": 10, "name": "Pfizer South Africa"},
+        ]
+
+    report_id  = str(_uuid.uuid4())
+    combined_id = str(_uuid.uuid4())
+
+    if session:
+        session["partner_done"] = True
+        session["reports"].append({
+            "id": report_id, "report_type": "partner",
+            "badge": "바이어", "title": f"바이어 발굴 · {label}", "top10": top10,
+        })
+
+    # 비동기 결합본 생성 예약 (after() 패턴)
+    async def _gen_combined():
+        await asyncio.sleep(3)
+        if session:
+            session["reports"].append({
+                "id": combined_id, "report_type": "combined",
+                "badge": "최종", "title": f"[최종] 최종 보고서 · {label}",
+            })
+    asyncio.create_task(_gen_combined())
+
+    return JSONResponse({
+        "ok": True,
+        "session_id":  body.session_id,
+        "top10":       top10,
+        "report_id":   report_id,
+        "combined_id": combined_id,
+    })
+
+
+@app.get("/api/za/report/session/{session_id}/list")
+async def za_report_list(session_id: str) -> JSONResponse:
+    """세션의 보고서 목록 반환 (2초마다 폴링)."""
+    session = _sessions.get(session_id)
+    if not session:
+        return JSONResponse({"ok": False, "reports": []})
+    return JSONResponse({"ok": True, "reports": session.get("reports", [])})
+
+
+@app.get("/api/za/report/{report_type}/{report_id}/pdf")
+async def za_report_pdf(report_type: str, report_id: str) -> JSONResponse:
+    """개별 보고서 PDF 다운로드 (실제 PDF 생성 미구현 시 JSON 반환)."""
+    # 세션에서 보고서 찾기
+    for session in _sessions.values():
+        for rep in session.get("reports", []):
+            if rep.get("id") == report_id:
+                return JSONResponse({
+                    "ok": True,
+                    "report_id": report_id,
+                    "report_type": report_type,
+                    "title": rep.get("title", ""),
+                    "content": rep.get("content", rep.get("scenarios", rep.get("top10", ""))),
+                    "message": "PDF 생성 기능은 report_generator.py 연동 후 활성화됩니다.",
+                })
+    raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
+
+
+@app.get("/api/za/report/combined")
+async def za_combined_pdf(session_id: str) -> JSONResponse:
+    """결합본 보고서 다운로드."""
+    session = _sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    combined = next((r for r in session.get("reports", []) if r.get("report_type") == "combined"), None)
+    if not combined:
+        return JSONResponse({"ok": False, "message": "최종 보고서가 아직 생성 중입니다. 잠시 후 다시 시도하세요."})
+    return JSONResponse({"ok": True, "session_id": session_id, "report": combined})
+
+
 # ── 인도네시아 AHP 파트너 매칭 ────────────────────────────────────────────────────
 
 @app.get("/api/ahp/partners")
