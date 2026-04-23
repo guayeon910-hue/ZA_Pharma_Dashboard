@@ -7,6 +7,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <style>
     body { font-family: 'Noto Sans KR', sans-serif; }
     .tab-active { background-color: #1e3a8a; color: white; }
@@ -24,7 +26,7 @@
     select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E"); background-position: right 0.5rem center; background-repeat: no-repeat; background-size: 1.5em 1.5em; padding-right: 2.5rem; -webkit-appearance: none; appearance: none; }
   </style>
 </head>
-<body class="bg-gray-50 min-h-screen">
+<body class="bg-[#f8f7f5] text-gray-800 font-sans antialiased relative min-h-screen">
 
 <!-- ════ 헤더 ════ -->
 <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
@@ -32,14 +34,72 @@
     <img src="/static/images/logo.png" alt="로고" class="h-8 w-auto" onerror="this.style.display='none'">
     <span class="text-base font-semibold text-gray-800">한국유나이티드제약(주) 해외 영업·마케팅 대시보드</span>
   </div>
-  <div class="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-full px-4 py-1.5">
-    <span class="text-lg">🇿🇦</span>
-    <span class="text-sm font-semibold text-blue-800">South Africa</span>
+  <div class="flex items-center gap-6">
+    <nav class="flex gap-4 mt-2">
+      <button id="nav-preview" class="text-sm font-bold text-blue-900 border-b-2 border-blue-900 pb-2 px-1 transition-colors" onclick="goTab('preview')">메인 프리뷰</button>
+      <button id="nav-main" class="text-sm font-semibold text-gray-500 border-b-2 border-transparent hover:text-gray-800 pb-2 px-1 transition-colors" onclick="goTab('main')">시장조사 분석</button>
+    </nav>
+    <div class="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-full px-4 py-1.5">
+      <span class="text-lg">🇿🇦</span>
+      <span class="text-sm font-semibold text-blue-800">South Africa</span>
+    </div>
   </div>
 </header>
 
-<!-- ════ 메인 2블록 ════ -->
-<main class="max-w-screen-xl mx-auto px-4 py-6">
+<!-- ════ 메인 프리뷰 ════ -->
+<main id="tab-preview" class="max-w-screen-xl mx-auto px-4 py-6 block">
+  <!-- KPI 카드 4개 -->
+  <div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm text-center">
+      <div class="text-sm font-semibold text-gray-500 mb-1">국가 GDP</div>
+      <div class="text-2xl font-bold text-blue-900">US$ 377.8B</div>
+      <div class="text-xs text-gray-400 mt-2">IMF</div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm text-center">
+      <div class="text-sm font-semibold text-gray-500 mb-1">인구</div>
+      <div class="text-2xl font-bold text-blue-900">60,414,495명</div>
+      <div class="text-xs text-gray-400 mt-2">Stats SA</div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm text-center">
+      <div class="text-sm font-semibold text-gray-500 mb-1">의약품 시장 규모</div>
+      <div class="text-2xl font-bold text-blue-900">$3.5B</div>
+      <div class="text-xs text-gray-400 mt-2">BMI/Fitch</div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm text-center">
+      <div class="text-sm font-semibold text-gray-500 mb-1">의약품 국가 수입 의존도</div>
+      <div class="text-2xl font-bold text-blue-900">~75%</div>
+      <div class="text-xs text-gray-400 mt-2">SAHPRA</div>
+    </div>
+  </div>
+
+  <!-- 지도 + 뉴스 2컬럼 -->
+  <div class="flex gap-4">
+    <!-- Map -->
+    <div class="flex-1 bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+      <div class="text-sm font-bold text-gray-900 mb-4">남아프리카공화국 위치</div>
+      <div id="sa-map" class="h-[350px] w-full rounded-lg border border-gray-200 z-0 relative"></div>
+    </div>
+    <!-- Trends -->
+    <div class="flex-1 bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-4">
+        <div class="text-sm font-bold text-gray-900">남아공 의약품 시장 주요 동향</div>
+        <button class="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 bg-gray-100 px-2 py-1 rounded">
+          ↺ 새로고침
+        </button>
+      </div>
+      <div class="space-y-4 text-sm text-gray-700">
+        <div class="pb-3 border-b border-gray-100 font-medium hover:text-blue-600 transition-colors cursor-pointer">SAHPRA, 아프리카 내 가장 엄격한 의약품 규제 기관으로 자리매김</div>
+        <div class="pb-3 border-b border-gray-100 font-medium hover:text-blue-600 transition-colors cursor-pointer">공공 의료 조달(NDoH) 입찰 경쟁 심화… 제네릭 의약품 점유율 증가</div>
+        <div class="pb-3 border-b border-gray-100 font-medium hover:text-blue-600 transition-colors cursor-pointer">다국적 제약사들, 아프리카 진출 교두보로 남아공 시장 적극 활용</div>
+        <div class="pb-3 border-b border-gray-100 font-medium hover:text-blue-600 transition-colors cursor-pointer">민간 의료보험 가입자를 중심으로 만성질환(심혈관, 당뇨 등) 의약품 수요 급증</div>
+        <div class="font-medium hover:text-blue-600 transition-colors cursor-pointer">현지 제조(Local Manufacturing) 우대 정책에 따른 기술 이전 및 파트너십 기회 확대</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ════ 메인 2블록 (시장조사 분석) ════ -->
+<main id="tab-main" class="max-w-screen-xl mx-auto px-4 py-6 hidden">
   <div class="flex gap-4">
 
     <!-- ── [01] 수출가격 전략 ── -->
@@ -63,10 +123,15 @@
           <option value="hydrine"            data-uuid="bdfc9883-6040-438a-8e7a-df01f1230682" data-inn="Hydroxyurea">[항암제] Hydrine · hydroxyurea 500mg</option>
           <option value="gadvoa_inj"         data-uuid="895f49ae-6ce3-44a3-93bd-bb77e027ba59" data-inn="Gadobutrol">[조영제] Gadvoa Inj · gadobutrol 604mg</option>
         </select>
-        <button id="btn-analyze" onclick="runAnalyze()" class="flex items-center gap-1.5 bg-blue-900 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap" disabled>
-          <svg id="analyze-spin" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-          <span id="analyze-label">▶ 분석 실행</span>
+        <button id="btn-analyze" onclick="runAnalyze()" class="flex items-center gap-1.5 bg-blue-900 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap transition-colors" disabled>
+          ▶ 분석 실행
         </button>
+      </div>
+
+      <!-- 로딩 인디케이터 -->
+      <div id="market-loading" class="hidden flex items-center gap-2 mb-3 text-sm text-gray-500">
+        <svg class="w-4 h-4 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+        <span>시장조사 분석 중...</span>
       </div>
 
       <!-- 분석 완료 배너 -->
@@ -147,62 +212,75 @@
 
     <!-- ── [02] 바이어 발굴 ── -->
     <div class="flex-1 bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-      <!-- 제목 + 최종 보고서 버튼 -->
+      <!-- 제목 -->
       <div class="flex items-center justify-between mb-5">
         <div class="flex items-center gap-3">
           <span class="w-8 h-8 rounded-lg bg-blue-900 text-white text-sm font-bold flex items-center justify-center">02</span>
           <h2 class="text-lg font-bold text-gray-900">바이어 발굴</h2>
         </div>
-        <button id="btn-download-final" onclick="downloadFinal()" class="flex items-center gap-1.5 border-2 border-blue-900 text-blue-900 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+      </div>
+
+      <!-- 시장조사 보고서 선택 + 바이어 발굴 실행 -->
+      <div class="flex gap-2 mb-2">
+        <select id="sel-partner-report" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 transition-colors">
+          <option value="">시장조사 보고서를 선택하세요.</option>
+        </select>
+        <button id="btn-partner" onclick="runPartner()" class="flex items-center gap-1.5 bg-blue-900 text-white text-sm font-semibold px-6 py-2 rounded-lg hover:bg-blue-800 disabled:opacity-50 disabled:bg-slate-400 disabled:cursor-not-allowed whitespace-nowrap transition-colors" disabled>
+          ▶ 바이어 발굴 실행
+        </button>
+      </div>
+      
+      <!-- 진행 상태 텍스트 (Hidden by default) -->
+      <div id="buyer-loading-indicator" class="hidden text-xs text-gray-500 font-medium mb-5 flex items-center gap-2 pl-2">
+        <svg class="w-3.5 h-3.5 animate-spin text-blue-900" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+        </svg>
+        <span id="buyer-loading-text">바이어 발굴 중...</span>
+      </div>
+
+      <div class="mb-5 h-2" id="buyer-loading-spacer"></div>
+
+      <!-- 기업 평가 기준 & 최종 보고서 블록 -->
+      <div class="flex items-stretch gap-3 mb-5">
+        <div class="flex-1 border border-gray-200 rounded-lg p-3 bg-white">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-bold text-gray-700">기업 평가 기준 <span class="text-gray-400 font-normal">(체크된 항목들에 대해 평가 후 추천 순위 배열)</span></span>
+            <button onclick="clearCriteria()" class="text-xs bg-orange-50 text-orange-600 border border-orange-200 px-2 py-0.5 rounded hover:bg-orange-100 transition-colors">전체 해제</button>
+          </div>
+          <div class="flex flex-wrap gap-4">
+            <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+              <input type="checkbox" id="crit-1" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
+              <span>① 매출규모</span>
+            </label>
+            <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+              <input type="checkbox" id="crit-2" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
+              <span>② 파이프라인</span>
+            </label>
+            <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+              <input type="checkbox" id="crit-3" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
+              <span>③ 제조소 보유</span>
+            </label>
+            <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+              <input type="checkbox" id="crit-4" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
+              <span>④ 수입 경험</span>
+            </label>
+            <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+              <input type="checkbox" id="crit-5" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
+              <span>⑤ 약국체인 운영</span>
+            </label>
+          </div>
+        </div>
+        
+        <button id="btn-download-final" onclick="downloadFinal()" class="w-48 bg-blue-900 text-white text-sm font-semibold rounded-lg hover:bg-blue-800 disabled:opacity-50 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors" disabled>
           ↓ 최종 보고서 다운로드
         </button>
       </div>
 
-      <!-- 시장조사 보고서 선택 + 바이어 발굴 실행 -->
-      <div class="flex gap-2 mb-5">
-        <select id="sel-partner-report" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white">
-          <option value="">시장조사 보고서를 선택하세요.</option>
-        </select>
-        <button id="btn-partner" onclick="runPartner()" class="flex items-center gap-1.5 bg-blue-900 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap" disabled>
-          <svg id="partner-spin" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-          ▶ 바이어 발굴 실행
-        </button>
-      </div>
-
-      <!-- 기업 평가 기준 -->
-      <div class="mb-5">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-xs text-gray-500">기업 평가 기준 <span class="text-gray-400">(체크된 항목들에 대해 평가 후 추천 순위 배열)</span></span>
-          <button onclick="clearCriteria()" class="text-xs bg-orange-100 text-orange-700 border border-orange-300 px-2 py-0.5 rounded hover:bg-orange-200">전체 해제</button>
-        </div>
-        <div class="flex flex-wrap gap-3">
-          <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-            <input type="checkbox" id="crit-1" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
-            <span class="text-xs">① 매출규모</span>
-          </label>
-          <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-            <input type="checkbox" id="crit-2" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
-            <span class="text-xs">② 파이프라인</span>
-          </label>
-          <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-            <input type="checkbox" id="crit-3" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
-            <span class="text-xs">③ 제조소 보유</span>
-          </label>
-          <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-            <input type="checkbox" id="crit-4" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
-            <span class="text-xs">④ 수입 경험</span>
-          </label>
-          <label class="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
-            <input type="checkbox" id="crit-5" class="w-4 h-4 rounded border-gray-300 text-blue-600" checked>
-            <span class="text-xs">⑤ 약국체인 운영</span>
-          </label>
-        </div>
-      </div>
-
       <!-- Top 10 -->
       <div>
-        <div class="text-sm font-semibold text-gray-700 mb-3">Top 10</div>
-        <div id="top10-list" class="space-y-2">
+        <div class="text-sm font-bold text-blue-900 mb-3 pl-1">Top 10</div>
+        <div id="top10-list" class="space-y-1">
           <div class="text-sm text-gray-400 text-center py-8">바이어 발굴 실행 후 결과가 표시됩니다.</div>
         </div>
       </div>
@@ -236,23 +314,113 @@
   </div>
 </div>
 
-<!-- ════ 가격 편집 모달 ════ -->
+<!-- ════ 가격 편집 모달 (Advanced) ════ -->
 <div id="edit-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
-  <div class="bg-white rounded-xl shadow-2xl w-80 p-6">
-    <h3 id="edit-modal-title" class="text-base font-bold text-gray-900 mb-4"></h3>
-    <div class="space-y-3">
-      <div>
-        <label class="text-xs text-gray-500 mb-1 block">FOB 수출가 (USD)</label>
-        <input id="edit-usd" type="number" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+  <div class="bg-white rounded-xl shadow-2xl w-[450px] p-6 relative">
+    <!-- Close button -->
+    <button onclick="closeEdit()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+    
+    <h3 id="edit-modal-title" class="text-base font-bold text-gray-900 mb-4">기준가 — 역산·옵션 편집</h3>
+    
+    <div class="space-y-4">
+      <!-- Info box -->
+      <div class="flex justify-between items-center text-sm border-b border-gray-100 pb-3">
+        <span class="text-gray-500 font-medium">보고서 가격</span>
+        <span class="font-medium text-teal-700 bg-teal-50 px-3 py-1 rounded-full border border-teal-100" id="edit-modal-report-price">0.00 ZAR ≈ 0.00 USD</span>
       </div>
-      <div>
-        <label class="text-xs text-gray-500 mb-1 block">현지 소매가 참고 (ZAR)</label>
-        <input id="edit-zar" type="number" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+      
+      <!-- Base Price Input -->
+      <div class="flex justify-between items-center py-1">
+        <span class="text-sm text-gray-800 font-bold">기준가 (USD)</span>
+        <input id="edit-usd" type="number" step="0.01" class="w-28 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-right font-semibold bg-blue-50 text-blue-900 focus:outline-none focus:ring-2 focus:ring-blue-500" oninput="recalcEdit()">
+      </div>
+      
+      <!-- Options section -->
+      <div class="pt-2">
+        <div class="flex justify-between items-center mb-3">
+          <span class="text-xs font-bold text-gray-500">주기 옵션</span>
+          <button onclick="resetEditOptions()" class="text-[10px] bg-orange-50 text-orange-600 border border-orange-200 px-2 py-0.5 rounded hover:bg-orange-100">초기화</button>
+        </div>
+        <div id="edit-options-list" class="space-y-2 mb-3">
+          <!-- Option items will be injected here by JS -->
+        </div>
+        
+        <!-- Add new option row -->
+        <div class="flex gap-1.5 items-center bg-gray-50 p-2 rounded-lg border border-gray-200">
+          <input type="text" id="new-opt-name" placeholder="옵션명" class="flex-1 text-xs px-2 py-1.5 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <select id="new-opt-type" class="w-20 text-xs px-1 py-1.5 border border-gray-300 rounded bg-white focus:outline-none">
+            <option value="deduct">% 차감</option>
+            <option value="multiply">× 배수</option>
+          </select>
+          <input type="number" id="new-opt-val" placeholder="값" class="w-16 text-xs px-2 py-1.5 border border-gray-300 rounded text-right focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <button onclick="addEditOption()" class="w-7 h-7 bg-teal-100 text-teal-700 rounded flex items-center justify-center hover:bg-teal-200 font-bold flex-shrink-0">✓</button>
+        </div>
+      </div>
+      
+      <!-- Result -->
+      <div class="pt-4 border-t border-gray-200 flex items-center justify-between">
+        <span class="text-sm text-gray-500">결과: <span id="edit-result" class="font-bold text-gray-900 ml-1">0.00 USD · 0.00 ZAR</span></span>
+        <button onclick="saveEdit()" class="bg-blue-900 text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-blue-800 transition-colors shadow-sm">저장</button>
       </div>
     </div>
-    <div class="flex gap-2 mt-5">
-      <button onclick="saveEdit()" class="flex-1 bg-blue-900 text-white text-sm font-semibold py-2 rounded-lg hover:bg-blue-800">저장</button>
-      <button onclick="closeEdit()" class="flex-1 border border-gray-300 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50">취소</button>
+  </div>
+</div>
+
+<!-- ════ 바이어 상세 모달 ════ -->
+<div id="buyer-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-xl shadow-2xl w-[600px] max-h-[90vh] overflow-y-auto relative p-8">
+    <button onclick="closeBuyerModal()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+    
+    <div class="flex items-baseline gap-3 mb-1">
+      <span id="buyer-modal-rank" class="text-3xl font-bold text-blue-900">1</span>
+      <h2 id="buyer-modal-name" class="text-2xl font-bold text-gray-900">Company Name</h2>
+    </div>
+    <div class="text-xs text-gray-400 mb-6 flex items-center gap-2">
+      <span id="buyer-modal-tags">South Africa · Pharmaceuticals</span>
+      <span class="bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-bold text-[10px]">South Africa</span>
+    </div>
+    
+    <div class="space-y-6 text-sm">
+      <div>
+        <h3 class="font-bold text-gray-800 mb-2">기업 개요</h3>
+        <p id="buyer-modal-overview" class="text-gray-600 leading-relaxed"></p>
+      </div>
+      
+      <div>
+        <h3 class="font-bold text-gray-800 mb-2">채택 이유</h3>
+        <p id="buyer-modal-reason" class="text-gray-600 leading-relaxed"></p>
+      </div>
+      
+      <div>
+        <h3 class="font-bold text-gray-800 mb-3">연락처</h3>
+        <div class="grid grid-cols-[80px_1fr] gap-y-2 text-gray-600 text-xs">
+          <div class="font-medium text-gray-500">주소</div>
+          <div id="buyer-modal-address"></div>
+          <div class="font-medium text-gray-500">전화</div>
+          <div id="buyer-modal-phone"></div>
+          <div class="font-medium text-gray-500">이메일</div>
+          <div id="buyer-modal-email"></div>
+          <div class="font-medium text-gray-500">웹사이트</div>
+          <div id="buyer-modal-website" class="text-blue-600"></div>
+          <div class="font-medium text-gray-500">부스</div>
+          <div id="buyer-modal-booth"></div>
+        </div>
+      </div>
+      
+      <div class="grid grid-cols-[80px_1fr] gap-y-2 text-gray-600 text-xs pt-2">
+        <div class="font-medium text-gray-500">기업 규모</div>
+        <div id="buyer-modal-scale"></div>
+        <div class="font-medium text-gray-500">사업 지역</div>
+        <div id="buyer-modal-region"></div>
+      </div>
+    </div>
+    
+    <div class="mt-8 flex justify-end">
+      <button onclick="closeBuyerModal()" class="bg-blue-900 text-white text-sm font-semibold px-6 py-2 rounded-lg hover:bg-blue-800">닫기</button>
     </div>
   </div>
 </div>

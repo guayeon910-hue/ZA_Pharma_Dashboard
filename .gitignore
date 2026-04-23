@@ -39,3 +39,7 @@ reports/*.json
 .idea/
 *.swp
 *.swo
+
+# Logs and Caches
+*.log
+datas/*_cache.json

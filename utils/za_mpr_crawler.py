@@ -130,8 +130,29 @@ async def fetch_sep_database(emit: Any = None) -> list[SepRecord]:
         return records
     except Exception as exc:
         if emit:
-            await emit({"phase": "mpr", "message": f"SEP 다운로드 실패: {exc}", "level": "warn"})
-        return _load_from_cache()
+            await emit({"phase": "mpr", "message": f"HTTP 실패({exc}) — Playwright 다운로드 시도", "level": "warn"})
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page(accept_downloads=True)
+                async with page.expect_download(timeout=30000) as download_info:
+                    await page.goto(download_url)
+                download = await download_info.value
+                path = await download.path()
+                with open(path, "rb") as f:
+                    data = f.read()
+                await browser.close()
+                
+            cache_file.write_bytes(data)
+            records = _parse_excel(data, download_url)
+            if emit:
+                await emit({"phase": "mpr", "message": f"Playwright 우회: SEP 데이터 {len(records)}건 파싱 완료", "level": "success"})
+            return records
+        except Exception as e2:
+            if emit:
+                await emit({"phase": "mpr", "message": f"Playwright 다운로드 실패: {e2} — 캐시 폴백 사용", "level": "error"})
+            return _load_from_cache()
 
 
 async def _detect_latest_excel_url(emit: Any) -> str | None:

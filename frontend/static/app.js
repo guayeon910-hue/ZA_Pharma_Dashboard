@@ -48,11 +48,63 @@ const state = {
 };
 
 // ── 초기화 ────────────────────────────────────────────────────────────────────
+let map = null;
+
 window.addEventListener('DOMContentLoaded', () => {
   loadExchangeRate();
   startReportPolling();
   updateMarketTabDesc();
+  initMap();
 });
+
+function goTab(tabId) {
+  const tabPreview = document.getElementById('tab-preview');
+  const tabMain = document.getElementById('tab-main');
+  const navPreview = document.getElementById('nav-preview');
+  const navMain = document.getElementById('nav-main');
+
+  if (tabId === 'preview') {
+    tabPreview.classList.remove('hidden');
+    tabPreview.classList.add('block');
+    tabMain.classList.remove('block');
+    tabMain.classList.add('hidden');
+
+    navPreview.classList.add('text-blue-900', 'border-blue-900');
+    navPreview.classList.remove('text-gray-500', 'border-transparent');
+    navMain.classList.remove('text-blue-900', 'border-blue-900');
+    navMain.classList.add('text-gray-500', 'border-transparent');
+    
+    // Invalidate map size so Leaflet redraws it correctly when tab becomes visible
+    setTimeout(() => { if (map) map.invalidateSize(); }, 100);
+  } else {
+    tabMain.classList.remove('hidden');
+    tabMain.classList.add('block');
+    tabPreview.classList.remove('block');
+    tabPreview.classList.add('hidden');
+
+    navMain.classList.add('text-blue-900', 'border-blue-900');
+    navMain.classList.remove('text-gray-500', 'border-transparent');
+    navPreview.classList.remove('text-blue-900', 'border-blue-900');
+    navPreview.classList.add('text-gray-500', 'border-transparent');
+  }
+}
+
+function initMap() {
+  const mapContainer = document.getElementById('sa-map');
+  if (!mapContainer) return;
+  
+  // Center of South Africa roughly
+  map = L.map('sa-map').setView([-28.4793, 24.6727], 5);
+  
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  L.marker([-25.7479, 28.2293]).addTo(map)
+    .bindPopup('<b>South Africa</b><br>Pretoria')
+    .openPopup();
+}
 
 async function loadExchangeRate() {
   try {
@@ -79,6 +131,9 @@ async function runAnalyze() {
   const label = PRODUCT_LABEL[key] || key;
   const uuid  = PRODUCT_UUID[key];
 
+  const bannerEl = document.getElementById('banner-market-done');
+  if (bannerEl) bannerEl.classList.add('hidden');
+  
   setBtnLoading('btn-analyze', true, '▶ 분석 실행');
 
   try {
@@ -230,24 +285,122 @@ function fillPriceCards(scenarios) {
   });
 }
 
-// ── 가격 카드 편집 ────────────────────────────────────────────────────────────
+// ── 가격 카드 편집 (Advanced) ──────────────────────────────────────────────────
+function getDefaultEditOptions() {
+  return [
+    { id: 'opt_1', name: '에이전트 수수료', type: 'deduct', value: 15, checked: true },
+    { id: 'opt_2', name: '물류/통관비', type: 'deduct', value: 5, checked: true },
+    { id: 'opt_3', name: '조달청 입찰 수수료', type: 'deduct', value: 3, checked: true },
+    { id: 'opt_4', name: '환율 리스크 헤지', type: 'deduct', value: 2, checked: true },
+  ];
+}
+
 function editCard(scenario) {
   state.editingScenario = scenario;
   const names = { conservative: '저가 진입', baseline: '기준가', premium: '프리미엄' };
-  document.getElementById('edit-modal-title').textContent = `${names[scenario]} 수동 편집`;
-  document.getElementById('edit-usd').value = state.prices[scenario]?.usd || '';
-  document.getElementById('edit-zar').value = state.prices[scenario]?.zar || '';
+  const marketName = state.marketTab === 'public' ? '공공 시장' : '민간 시장';
+  document.getElementById('edit-modal-title').textContent = `${names[scenario]} — 역산·옵션 편집 [${marketName}]`;
+  
+  const usd = state.prices[scenario]?.usd || 0;
+  const zar = state.prices[scenario]?.zar || 0;
+  document.getElementById('edit-modal-report-price').textContent = `${zar.toFixed(2)} ZAR ≈ ${usd.toFixed(2)} USD`;
+  
+  document.getElementById('edit-usd').value = usd.toFixed(2);
+  
+  if (!state.editOptions) {
+    state.editOptions = getDefaultEditOptions();
+  }
+  renderEditOptions();
+  recalcEdit();
   document.getElementById('edit-modal').classList.remove('hidden');
+}
+
+function resetEditOptions() {
+  state.editOptions = getDefaultEditOptions();
+  renderEditOptions();
+  recalcEdit();
+}
+
+function renderEditOptions() {
+  const container = document.getElementById('edit-options-list');
+  container.innerHTML = state.editOptions.map(opt => `
+    <div class="flex items-center justify-between text-sm py-1 border-b border-gray-50 last:border-0">
+      <div class="flex items-center gap-2">
+        <input type="checkbox" ${opt.checked ? 'checked' : ''} onchange="toggleEditOption('${opt.id}')" class="w-3.5 h-3.5 rounded border-gray-300 text-blue-600">
+        <span class="${opt.checked ? 'text-gray-700' : 'text-gray-400'}">${opt.name}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500 w-12 text-right">${opt.type === 'deduct' ? '% 차감' : '× 배수'}</span>
+        <span class="font-mono text-gray-700 bg-white border border-gray-200 px-2 py-0.5 rounded w-12 text-right">${opt.value}</span>
+        <button onclick="removeEditOption('${opt.id}')" class="text-red-400 hover:text-red-600 text-xs px-1">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleEditOption(id) {
+  const opt = state.editOptions.find(o => o.id === id);
+  if (opt) opt.checked = !opt.checked;
+  renderEditOptions();
+  recalcEdit();
+}
+
+function removeEditOption(id) {
+  state.editOptions = state.editOptions.filter(o => o.id !== id);
+  renderEditOptions();
+  recalcEdit();
+}
+
+function addEditOption() {
+  const name = document.getElementById('new-opt-name').value.trim();
+  const type = document.getElementById('new-opt-type').value;
+  const val = parseFloat(document.getElementById('new-opt-val').value);
+  if (!name || isNaN(val)) { alert('옵션명과 값을 정확히 입력하세요.'); return; }
+  
+  state.editOptions.push({
+    id: 'opt_' + Date.now(),
+    name, type, value: val, checked: true
+  });
+  
+  document.getElementById('new-opt-name').value = '';
+  document.getElementById('new-opt-val').value = '';
+  
+  renderEditOptions();
+  recalcEdit();
+}
+
+function recalcEdit() {
+  let baseUsd = parseFloat(document.getElementById('edit-usd').value) || 0;
+  
+  let finalUsd = baseUsd;
+  let deductPct = 0;
+  
+  state.editOptions.forEach(opt => {
+    if (!opt.checked) return;
+    if (opt.type === 'deduct') {
+      deductPct += opt.value;
+    } else if (opt.type === 'multiply') {
+      finalUsd *= opt.value;
+    }
+  });
+  
+  if (deductPct > 0) {
+    finalUsd = finalUsd * (1 - deductPct / 100);
+  }
+  
+  const finalZar = finalUsd * state.zarUsd;
+  document.getElementById('edit-result').textContent = `${finalUsd.toFixed(2)} USD · ${finalZar.toFixed(2)} ZAR`;
+  return { finalUsd, finalZar };
 }
 
 function saveEdit() {
   const s = state.editingScenario;
   if (!s) return;
-  const usd = parseFloat(document.getElementById('edit-usd').value) || 0;
-  const zar = parseFloat(document.getElementById('edit-zar').value) || (usd / state.zarUsd);
-  state.prices[s] = { usd, zar };
-  document.getElementById(`price-${s}-usd`).textContent = usd.toFixed(2);
-  document.getElementById(`price-${s}-zar`).textContent = `R ${zar.toFixed(2)}`;
+  const { finalUsd, finalZar } = recalcEdit();
+  
+  state.prices[s] = { usd: finalUsd, zar: finalZar };
+  document.getElementById(`price-${s}-usd`).textContent = finalUsd.toFixed(2);
+  document.getElementById(`price-${s}-zar`).textContent = `R ${finalZar.toFixed(2)}`;
   closeEdit();
 }
 
@@ -303,17 +456,39 @@ async function runPartner() {
 }
 
 function renderTop10(list) {
+  state.top10 = list;
   const container = document.getElementById('top10-list');
   if (!list.length) {
     container.innerHTML = '<div class="text-sm text-gray-400 text-center py-4">결과가 없습니다.</div>';
     return;
   }
   container.innerHTML = list.map((item, i) => `
-    <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors">
-      <span class="text-sm font-bold text-blue-900 w-5 text-center flex-shrink-0">${i + 1}</span>
-      <span class="text-sm text-gray-800">${item.name || item}</span>
+    <div onclick="openBuyerModal(${i})" class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors cursor-pointer">
+      <span class="text-sm font-bold text-blue-900 w-5 text-center flex-shrink-0">${item.rank || (i + 1)}</span>
+      <span class="text-sm font-medium text-gray-800">${item.name || item}</span>
     </div>
   `).join('');
+}
+
+function openBuyerModal(i) {
+  const buyer = state.top10[i];
+  if (!buyer) return;
+  document.getElementById('buyer-modal-rank').textContent = buyer.rank || (i + 1);
+  document.getElementById('buyer-modal-name').textContent = buyer.name || '';
+  document.getElementById('buyer-modal-overview').textContent = buyer.overview || '상세 정보가 제공되지 않았습니다.';
+  document.getElementById('buyer-modal-reason').textContent = buyer.reason || '채택 사유가 제공되지 않았습니다.';
+  document.getElementById('buyer-modal-address').textContent = buyer.address || '-';
+  document.getElementById('buyer-modal-phone').textContent = buyer.phone || '-';
+  document.getElementById('buyer-modal-email').textContent = buyer.email || '-';
+  document.getElementById('buyer-modal-website').textContent = buyer.website || '-';
+  document.getElementById('buyer-modal-booth').textContent = buyer.booth || '-';
+  document.getElementById('buyer-modal-scale').textContent = buyer.scale || '-';
+  document.getElementById('buyer-modal-region').textContent = buyer.region || '-';
+  document.getElementById('buyer-modal').classList.remove('hidden');
+}
+
+function closeBuyerModal() {
+  document.getElementById('buyer-modal').classList.add('hidden');
 }
 
 // ── 최종 보고서 다운로드 ──────────────────────────────────────────────────────
@@ -430,5 +605,48 @@ function setBtnLoading(btnId, loading, defaultText) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
   btn.disabled = loading;
-  if (!loading) btn.textContent = defaultText;
+  if (btnId === 'btn-analyze') {
+    const loadingEl = document.getElementById('market-loading');
+    if (loading) {
+      btn.innerHTML = '⏳ 시장 조사';
+      btn.classList.add('bg-slate-400', 'hover:bg-slate-400');
+      btn.classList.remove('bg-blue-900', 'hover:bg-blue-800');
+      if (loadingEl) loadingEl.classList.remove('hidden');
+    } else {
+      btn.innerHTML = defaultText;
+      btn.classList.remove('bg-slate-400', 'hover:bg-slate-400');
+      btn.classList.add('bg-blue-900', 'hover:bg-blue-800');
+      if (loadingEl) loadingEl.classList.add('hidden');
+    }
+  } else if (btnId === 'btn-partner') {
+    const loadingEl = document.getElementById('buyer-loading-indicator');
+    const spacerEl = document.getElementById('buyer-loading-spacer');
+    const listEl = document.getElementById('top10-list');
+    
+    if (loading) {
+      btn.innerHTML = '... 바이어 발굴';
+      btn.classList.add('bg-slate-400', 'hover:bg-slate-400', 'cursor-not-allowed');
+      btn.classList.remove('bg-blue-900', 'hover:bg-blue-800');
+      if (loadingEl) loadingEl.classList.remove('hidden');
+      if (spacerEl) spacerEl.classList.add('hidden');
+      
+      // Render 8 skeleton rows
+      if (listEl) {
+        listEl.innerHTML = Array(8).fill(0).map((_, i) => `
+          <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-100 mb-1 bg-white">
+            <span class="text-sm font-bold text-gray-200 w-5 text-center flex-shrink-0">${i + 1}</span>
+            <div class="h-4 bg-slate-200 rounded animate-pulse" style="width: ${90 - Math.random() * 30}%"></div>
+          </div>
+        `).join('');
+      }
+    } else {
+      btn.innerHTML = defaultText;
+      btn.classList.remove('bg-slate-400', 'hover:bg-slate-400', 'cursor-not-allowed');
+      btn.classList.add('bg-blue-900', 'hover:bg-blue-800');
+      if (loadingEl) loadingEl.classList.add('hidden');
+      if (spacerEl) spacerEl.classList.remove('hidden');
+    }
+  } else {
+    if (!loading) btn.textContent = defaultText;
+  }
 }

@@ -97,19 +97,40 @@ async def _search_products(
 ) -> list[SahpraProduct]:
     # SAHPRA 검색 폼: GET 파라미터로 검색어 전송
     params = {"search": inn, "type": "medicine"}
+    html, url = "", ""
     try:
         resp = await client.get(base_url, params=params)
         resp.raise_for_status()
+        html = resp.text
+        url = str(resp.url)
     except Exception:
         # 검색 API 엔드포인트가 다를 경우 직접 접근
         try:
             api_url = f"{SAHPRA_BASE}/api/registered-products/"
             resp = await client.get(api_url, params={"q": inn})
             resp.raise_for_status()
+            html = resp.text
+            url = str(resp.url)
         except Exception:
-            return []
+            # Playwright Fallback
+            if emit:
+                await emit({"phase": "sahpra", "message": "API 접근 차단됨 — Playwright 우회 시도", "level": "warn"})
+            try:
+                from playwright.async_api import async_playwright
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    page = await browser.new_page()
+                    target_url = f"{base_url}?search={inn}&type=medicine"
+                    await page.goto(target_url, wait_until="networkidle", timeout=30000)
+                    html = await page.content()
+                    url = target_url
+                    await browser.close()
+            except Exception as e2:
+                if emit:
+                    await emit({"phase": "sahpra", "message": f"Playwright 우회 실패: {e2}", "level": "error"})
+                return []
 
-    return _parse_products_page(resp.text, inn, str(resp.url))
+    return _parse_products_page(html, inn, url)
 
 
 def _parse_products_page(html: str, inn: str, source_url: str) -> list[SahpraProduct]:

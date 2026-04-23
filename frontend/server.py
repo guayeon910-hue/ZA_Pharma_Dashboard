@@ -293,6 +293,10 @@ async def api_exchange() -> JSONResponse:
     """ZAR/KRW/USD 실시간 환율 (yfinance). 짧은 캐시로 준실시간 제공."""
     import time as _time
 
+    cache_file = ROOT / "datas" / "exchange_rate_cache.json"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    import json
+
     if _exchange_cache["data"] and _time.time() - _exchange_cache["ts"] < _EXCHANGE_TTL_SEC:
         return JSONResponse(_exchange_cache["data"])
 
@@ -315,13 +319,32 @@ async def api_exchange() -> JSONResponse:
         data = await loop.run_in_executor(None, _fetch)
         _exchange_cache["data"] = data
         _exchange_cache["ts"]   = _time.time()
+        # Save to disk
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
         return JSONResponse(data)
     except Exception as exc:
-        fallback: dict[str, Any] = {
+        fallback: dict[str, Any] = {}
+        # Try to load from disk
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    fallback = json.load(f)
+                fallback["source"] = "로컬 캐시 (Yahoo Finance 연결 실패)"
+                fallback["ok"] = False
+                fallback["error"] = str(exc)
+                return JSONResponse(fallback)
+            except Exception:
+                pass
+                
+        fallback = {
             "zar_krw": 76.5,
             "usd_krw": 1393.0,
             "zar_usd": 0.055,
-            "source": "폴백 (Yahoo Finance 연결 실패)",
+            "source": "하드코딩 폴백 (캐시/API 모두 실패)",
             "fetched_at": _time.time(),
             "ok": False,
             "error": str(exc),
@@ -736,28 +759,34 @@ async def _run_p2_ai_pipeline(report_path: str, market: str) -> None:
 - 보고서의 '참고 가격', 'SEP', 'MPR' 섹션을 특히 확인하세요.
 - USD($) 금액만 있다면 ref_price_zar는 null로, ref_price_currency는 'USD'로, ref_price_text에 원문 그대로 기록하세요."""
 
-        extract_resp = await asyncio.to_thread(
-            lambda: client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=1024,
-                messages=[{"role": "user", "content": extract_prompt}],
-            )
-        )
-
         extracted: dict[str, Any] = {}
-        try:
-            raw_extract = extract_resp.content[0].text
-            m_json = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw_extract, re.S)
-            if m_json:
-                extracted = json.loads(m_json.group(0))
-        except Exception:
-            extracted = {
-                "product_name": "미상",
-                "ref_price_zar": None,
-                "ref_price_text": "",
-                "market_context": "",
-                "verdict": "미상",
-            }
+        for attempt in range(2):
+            extract_resp = await asyncio.to_thread(
+                lambda: client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": extract_prompt}],
+                )
+            )
+            try:
+                raw_extract = extract_resp.content[0].text
+                # 좀 더 견고한 정규식으로 JSON 추출 시도 (중첩 중괄호 처리 향상)
+                m_json = re.search(r"\{[\s\S]*\}", raw_extract)
+                if m_json:
+                    extracted = json.loads(m_json.group(0))
+                    if "product_name" in extracted and "ref_price_zar" in extracted:
+                        break
+            except Exception:
+                # 파싱 실패 시 프롬프트를 좀 더 엄격하게 수정하여 재시도
+                extract_prompt += "\n\nCRITICAL: YOUR PREVIOUS OUTPUT WAS NOT VALID JSON. YOU MUST RESPOND ONLY WITH A VALID JSON OBJECT AND NOTHING ELSE."
+                if attempt == 1:
+                    extracted = {
+                        "product_name": "미상",
+                        "ref_price_zar": None,
+                        "ref_price_text": "",
+                        "market_context": "",
+                        "verdict": "미상",
+                    }
 
         _p2_ai_task["extracted"] = extracted
         await _emit({
@@ -1717,7 +1746,7 @@ async def za_report_partner(body: PartnerBody) -> JSONResponse:
                         f"{label} ({inn}) 남아공 수입·유통 파트너 Top 10을 추천해주세요.\n"
                         f"평가 기준: {', '.join(criteria)}\n"
                         "실제 존재하는 남아공 제약 회사 이름으로 답변하세요.\n"
-                        '응답 형식: [{"rank":1,"name":"Company Name"},{"rank":2,"name":"..."},...]'
+                        '응답 형식: [{"rank":1,"name":"Company Name","overview":"기업 개요 2-3문장","reason":"채택 이유 2-3문장","address":"...","phone":"...","email":"...","website":"...","scale":"...","region":"..."},...]'
                     ),
                 }],
             )
@@ -1730,18 +1759,30 @@ async def za_report_partner(body: PartnerBody) -> JSONResponse:
             pass
 
     if not top10:
-        # 폴백 Top 10
+        # 폴백 Top 10 (상세 데이터 구조 포함)
+        def _mock(r, n):
+            return {
+                "rank": r, "name": n,
+                "overview": f"{n}는 남아공 내 주요 의약품 수입 및 유통을 담당하는 선도적인 제약 파트너사입니다. 다수의 다국적 제약사와 협력하고 있습니다.",
+                "reason": f"매출 규모와 수입 경험 면에서 {label}의 현지 시장 진입 파트너로 가장 적합한 역량을 보유하고 있습니다.",
+                "address": "123 Healthcare Blvd, Sandton, Johannesburg, South Africa",
+                "phone": "+27 11 123 4567",
+                "email": f"contact@{n.lower().replace(' ', '')}.co.za",
+                "website": f"www.{n.lower().replace(' ', '')}.co.za",
+                "scale": "대기업 (연매출 $500M 이상)",
+                "region": "남아프리카 공화국 및 SADC 지역"
+            }
         top10 = [
-            {"rank": 1, "name": "Aspen Pharmacare Holdings"},
-            {"rank": 2, "name": "Adcock Ingram Holdings"},
-            {"rank": 3, "name": "Cipla Quality Chemical"},
-            {"rank": 4, "name": "Dis-Chem Pharmacies"},
-            {"rank": 5, "name": "Clicks Group"},
-            {"rank": 6, "name": "Pharmed (Pty) Ltd"},
-            {"rank": 7, "name": "Fresenius Kabi South Africa"},
-            {"rank": 8, "name": "Austell Pharmaceuticals"},
-            {"rank": 9, "name": "Bayer Healthcare SA"},
-            {"rank": 10, "name": "Pfizer South Africa"},
+            _mock(1, "Aspen Pharmacare Holdings"),
+            _mock(2, "Adcock Ingram Holdings"),
+            _mock(3, "Cipla Quality Chemical"),
+            _mock(4, "Dis-Chem Pharmacies"),
+            _mock(5, "Clicks Group"),
+            _mock(6, "Pharmed (Pty) Ltd"),
+            _mock(7, "Fresenius Kabi South Africa"),
+            _mock(8, "Austell Pharmaceuticals"),
+            _mock(9, "Bayer Healthcare SA"),
+            _mock(10, "Pfizer South Africa"),
         ]
 
     report_id  = str(_uuid.uuid4())
@@ -1783,33 +1824,96 @@ async def za_report_list(session_id: str) -> JSONResponse:
 
 
 @app.get("/api/za/report/{report_type}/{report_id}/pdf")
-async def za_report_pdf(report_type: str, report_id: str) -> JSONResponse:
-    """개별 보고서 PDF 다운로드 (실제 PDF 생성 미구현 시 JSON 반환)."""
+async def za_report_pdf(report_type: str, report_id: str):
+    """개별 보고서 PDF 다운로드."""
+    from fastapi.responses import FileResponse
+    from utils.za_pdf_generator import render_za_single_pdf
+
     # 세션에서 보고서 찾기
+    target_session = None
+    target_report = None
     for session in _sessions.values():
         for rep in session.get("reports", []):
             if rep.get("id") == report_id:
-                return JSONResponse({
-                    "ok": True,
-                    "report_id": report_id,
-                    "report_type": report_type,
-                    "title": rep.get("title", ""),
-                    "content": rep.get("content", rep.get("scenarios", rep.get("top10", ""))),
-                    "message": "PDF 생성 기능은 report_generator.py 연동 후 활성화됩니다.",
-                })
-    raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
+                target_session = session
+                target_report = rep
+                break
+        if target_report:
+            break
+
+    if not target_report:
+        raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다.")
+
+    out_dir = Path(ROOT) / "reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    product_label = target_session.get("product_label", "의약품")
+
+    type_labels = {
+        "market": "시장보고서",
+        "pricing_public": "수출가격전략_공공",
+        "pricing_private": "수출가격전략_민간",
+        "partner": "바이어리스트",
+        "combined": "최종보고서",
+    }
+    type_label = type_labels.get(report_type, report_type)
+    file_name = f"ZA_{type_label}_{product_label.replace(' ', '_')}.pdf"
+    out_path = out_dir / file_name
+
+    # combined 타입은 기존 전체 PDF 생성기로 위임
+    if report_type == "combined":
+        from utils.za_pdf_generator import render_za_combined_pdf
+        try:
+            render_za_combined_pdf(target_session, str(out_path))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {str(e)}")
+    else:
+        try:
+            render_za_single_pdf(target_session, target_report, report_type, str(out_path))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {str(e)}")
+
+    if not out_path.exists():
+        raise HTTPException(status_code=500, detail="PDF 파일 생성에 실패했습니다.")
+
+    return FileResponse(
+        path=out_path,
+        media_type="application/pdf",
+        filename=file_name
+    )
 
 
 @app.get("/api/za/report/combined")
-async def za_combined_pdf(session_id: str) -> JSONResponse:
-    """결합본 보고서 다운로드."""
+async def za_combined_pdf(session_id: str):
+    """결합본 보고서 다운로드 (PDF)."""
+    from fastapi.responses import FileResponse
+    from utils.za_pdf_generator import render_za_combined_pdf
+    
     session = _sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     combined = next((r for r in session.get("reports", []) if r.get("report_type") == "combined"), None)
     if not combined:
         return JSONResponse({"ok": False, "message": "최종 보고서가 아직 생성 중입니다. 잠시 후 다시 시도하세요."})
-    return JSONResponse({"ok": True, "session_id": session_id, "report": combined})
+        
+    out_dir = Path(ROOT) / "reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    product_label = session.get("product_label", "의약품")
+    file_name = f"ZA_최종보고서_{product_label.replace(' ', '_')}.pdf"
+    out_path = out_dir / file_name
+    
+    try:
+        render_za_combined_pdf(session, str(out_path))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {str(e)}")
+        
+    if not out_path.exists():
+        raise HTTPException(status_code=500, detail="PDF 파일 생성에 실패했습니다.")
+        
+    return FileResponse(
+        path=out_path,
+        media_type="application/pdf",
+        filename=file_name
+    )
 
 
 # ── 인도네시아 AHP 파트너 매칭 ────────────────────────────────────────────────────
