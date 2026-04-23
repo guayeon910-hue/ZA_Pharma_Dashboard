@@ -388,6 +388,8 @@ _PRODUCT_ID_TO_INN: dict[str, str] = {v: k for k, v in PRODUCT_MAP.items()}
 
 async def analyze_product(product_id: str, emit: Any = None) -> dict[str, Any]:
     """단일 품목 ZA 수출 적합성 분석 (파이프라인 엔드포인트용)."""
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return _no_api_result(product_id)
     inn = _PRODUCT_ID_TO_INN.get(product_id)
     if not inn:
         return _no_api_result(product_id)

@@ -2,14 +2,17 @@ services:
   - type: web
     name: za-analysis-dashboard
     runtime: python
+    region: singapore
     plan: starter
-    autoDeploy: true
-    buildCommand: pip install -r requirements.txt && python scripts/download_fonts.py || echo "[fonts] Font download failed — Korean PDF text may use fallback"
+    autoDeployTrigger: commit
+    buildCommand: python -m pip install -r requirements.txt && (python scripts/download_fonts.py || echo "[fonts] Font download failed; Korean PDF text may use fallback")
     startCommand: uvicorn frontend.server:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.13.1
+        value: 3.12.12
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: CORS_ORIGINS
         value: "*"
       - key: PLAYWRIGHT_LIVE

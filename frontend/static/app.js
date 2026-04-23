@@ -93,16 +93,16 @@ function initMap() {
   const mapContainer = document.getElementById('sa-map');
   if (!mapContainer) return;
   
-  // Center of South Africa roughly
-  map = L.map('sa-map').setView([-28.4793, 24.6727], 5);
+  // Center of Singapore roughly
+  map = L.map('sa-map').setView([1.3521, 103.8198], 11);
   
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18,
     attribution: '© OpenStreetMap contributors'
   }).addTo(map);
 
-  L.marker([-25.7479, 28.2293]).addTo(map)
-    .bindPopup('<b>South Africa</b><br>Pretoria')
+  L.marker([1.3521, 103.8198]).addTo(map)
+    .bindPopup('<b>Singapore</b>')
     .openPopup();
 }
 
